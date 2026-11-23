@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>SBNRI RTI TV</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial,Helvetica,sans-serif}
+#dash{position:fixed;left:0;top:0;width:100%;height:100%;border:0;background:#fff}
+#start{position:fixed;left:0;top:0;right:0;bottom:0;z-index:20;background:rgba(6,20,12,.85);color:#fff;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer}
+#start div{font-size:40px;font-weight:700;padding:0 30px}
+#start small{display:block;font-size:20px;font-weight:400;margin-top:14px;opacity:.75}
+#feed{position:fixed;right:18px;top:14px;z-index:30;width:430px;max-width:92%}
+.card{position:relative;margin-bottom:10px;padding:12px 16px 12px 18px;border-radius:12px;background:#0d1f16;color:#fff;border-left:7px solid #4caf50;box-shadow:0 6px 22px rgba(0,0,0,.35);opacity:0;transform:translateX(40px);transition:opacity .35s,transform .35s}
+.card.in{opacity:.97;transform:translateX(0)}
+.card .row1{display:flex;align-items:center;justify-content:space-between}
+.card .tier{font-size:13px;font-weight:700;letter-spacing:1.5px;color:#9be7b0}
+.card .amt{font-size:34px;font-weight:800;line-height:1.1;margin-top:2px}
+.card .meta{font-size:15px;opacity:.85;margin-top:2px}
+.card .quote{font-size:14px;font-style:italic;color:#f2d98a;margin-top:6px}
+.card.s1{border-left-color:#f2c94c}.card.s1 .tier{color:#f2c94c}
+.card.s2{border-left-color:#ffd54f;background:#102a1b}.card.s2 .tier{color:#ffd54f}
+.card.s3{border-left-color:#ffca28;background:linear-gradient(135deg,#1b2a10,#2e2a08);box-shadow:0 0 28px rgba(255,202,40,.55)}.card.s3 .tier{color:#ffd54f}.card.s3 .amt{color:#ffe082}
+.conf{position:fixed;top:-40px;z-index:29;pointer-events:none;opacity:.95;animation:fall 3.6s linear forwards}
+@keyframes fall{to{transform:translateY(105vh) rotate(540deg);opacity:.2}}
+#badge{position:fixed;right:12px;bottom:10px;z-index:25;padding:5px 12px;border-radius:14px;background:rgba(0,0,0,.6);color:#fff;font-size:13px}
+#tally{position:fixed;left:12px;bottom:10px;z-index:25;padding:5px 12px;border-radius:14px;background:rgba(13,31,22,.8);color:#9be7b0;font-size:13px}
+</style></head>
+<body>
+<iframe id="dash" src="https://metabase.sbnri.com/public/dashboard/73726079-9a9a-4a08-b4f4-ce0be6a805cb?tab=19-rti#bordered=false&titled=false&refresh=60"></iframe>
+<div id="start"><div>&#128276; Press OK / click once to open the trading floor<small>Needed once after the TV opens this page</small></div></div>
+<div id="feed"></div>
+<div id="tally"></div>
+<div id="badge">starting...</div>
+<script>
+(function () {
+  var FEED = 'https://n8n.sbnri.com/webhook/sbnri-rti-feed', POLL_MS = 20000, SR = 22050;
+  var seen = {}, first = true, armed = false, lastOk = '', lastErr = '';
+  var tallyN = 0, tallyAmt = 0;
+
+  /* ---------- sound engine: real coin recordings (CC0, BigSoundBank), sliced and layered per slab ---------- */
+  function snd(id) { return 'https://n8n.sbnri.com/webhook/sbnri-rti-snd?f=' + id; }
+  var FILES = { c1: '0193', c2: '0194', cupA: '0339', cupB: '0340', cupC: '0341' };
+  var ctx = null, master = null, bufs = {}, nLoaded = 0, nTotal = 5;
+  function rnd(a, z) { return a + Math.random() * (z - a); }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function getCtx() {
+    if (!ctx) {
+      var C = window.AudioContext || window.webkitAudioContext;
+      ctx = new C();
+      var comp = ctx.createDynamicsCompressor();
+      master = ctx.createGain(); master.gain.value = 2.4; comp.threshold.value = -10; comp.ratio.value = 8;
+      master.connect(comp); comp.connect(ctx.destination);
+    }
+    return ctx;
+  }
+  function loadOne(key) {
+    var x = new XMLHttpRequest();
+    x.open('GET', snd(FILES[key])); x.responseType = 'arraybuffer';
+    x.onload = function () {
+      try {
+        getCtx().decodeAudioData(x.response, function (b) { bufs[key] = b; nLoaded++; if (nLoaded === nTotal) { try { findGrains(); } catch (e) {} } setBadge(); }, function () {});
+      } catch (e) {}
+    };
+    x.send();
+  }
+  function loadAll() { for (var k in FILES) loadOne(k); }
+
+  /* [start, length] slices (seconds) of "Coins 1": handfuls of coins falling on a floor */
+  var TAKES = [[0.10, 1.00], [1.93, 1.25], [14.73, 1.10], [16.35, 1.50], [20.60, 1.10], [22.80, 1.20], [24.50, 1.10]];
+  var SHORT = [TAKES[0], TAKES[1], TAKES[4]];
+  var CUPS = ['cupA', 'cupB', 'cupC'];
+  function slice(key, start, len, when, vol, rate) {
+    var b = bufs[key]; if (!b || !ctx) return;
+    rate = rate || 1;
+    var src = ctx.createBufferSource(), g = ctx.createGain(), t0 = ctx.currentTime + 0.03 + when, d = len / rate;
+    src.buffer = b; src.playbackRate.value = rate;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(vol, t0 + 0.015);
+    g.gain.setValueAtTime(vol, t0 + Math.max(0.02, d - 0.12));
+    g.gain.linearRampToValueAtTime(0.0001, t0 + d);
+    src.connect(g); g.connect(master);
+    src.start(t0, start, len);
+  }
+  function take(t, when, vol) { slice('c1', t[0], t[1], when, vol, rnd(0.95, 1.07)); }
+  var GR = [];
+  function findGrains() {
+    var keys = ['c1', 'c2'], ki, b, d, sr, hop, i, j, a, env, prev, last, pk, mx;
+    GR = [];
+    for (ki = 0; ki < 2; ki++) {
+      b = bufs[keys[ki]]; if (!b) continue;
+      d = b.getChannelData(0); sr = b.sampleRate; hop = Math.floor(sr * 0.005); env = []; mx = 0;
+      for (i = 0; i + hop <= d.length; i += hop) {
+        pk = 0; for (j = i; j < i + hop; j++) { a = d[j] < 0 ? -d[j] : d[j]; if (a > pk) pk = a; }
+        env.push(pk); if (pk > mx) mx = pk;
+      }
+      last = -100;
+      for (i = 4; i < env.length; i++) {
+        prev = (env[i - 1] + env[i - 2] + env[i - 3] + env[i - 4]) / 4 + 0.002;
+        if (env[i] > mx * 0.10 && env[i] > prev * 2.2 && i - last > 10) { GR.push({ k: keys[ki], s: Math.max(0, i * hop / sr - 0.005) }); last = i; }
+      }
+    }
+  }
+  /* a spill: many single coin hits, dense at the start and thinning out like coins pouring onto a pile */
+  function spill(n, dur, vol) {
+    var i, g, t;
+    for (i = 0; i < n; i++) {
+      g = GR[Math.floor(Math.random() * GR.length)];
+      t = dur * Math.pow(Math.random(), 1.7);
+      slice(g.k, g.s, 0.32, t, vol * rnd(0.45, 1), rnd(0.88, 1.18));
+    }
+  }
+  var DUR = [0.9, 1.5, 2.5, 3.7];
+  function playSlab(s) {
+    var k;
+    if (s === 0) { k = pick(CUPS); if (bufs[k]) slice(k, 0, bufs[k].duration, 0, 0.55, rnd(0.97, 1.05)); return; }
+    if (GR.length < 20) {                       /* fallback if hits could not be extracted */
+      take(pick(SHORT), 0, 0.7); if (s > 1) take(pick(TAKES), 0.55, 0.7); return;
+    }
+    if (s === 1) { spill(22, 0.9, 0.95); return; }
+    if (s === 2) { take(TAKES[1], 0, 0.45); spill(70, 1.8, 1.0); return; }
+    slice('c2', 2.4, 3.0, 0, 0.45, 1);
+    take(TAKES[3], 0, 0.55); take(TAKES[5], 0.9, 0.5);
+    spill(60, 0.8, 1.0); spill(150, 3.0, 1.0);
+  }
+
+  var queue = [], busy = false;
+  function pump() {
+    if (busy || !queue.length) return;
+    var s = queue.shift(); busy = true;
+    try { playSlab(s); } catch (e) {}
+    setTimeout(function () { busy = false; pump(); }, DUR[s] * 1000 + 100);
+  }
+  function enqueue(s) { if (queue.length < 3) queue.push(s); pump(); }
+
+  /* ---------- slabs + visuals ---------- */
+  var NAMES = ['SPARK', 'DEAL', 'BIG DEAL', 'WHALE'];
+  var ICONS = ['💵', '🔔', '💰', '🐋'];
+  var QUOTES = [
+    ['Every rupee counts.', 'Small wins stack up.', 'Steady flow, steady book.'],
+    ['Keep the phones warm.', 'That is how a book gets built.', 'Another one on the board.'],
+    ['Big ticket. Keep the momentum!', 'Closers close.', 'This is what the desk is for.'],
+    ['WHALE ON THE BOARD!', 'Rainmaker energy!', 'Ring it loud. Team win!']
+  ];
+  var SHOW_MS = [4500, 6500, 8000, 11000];
+  function slab(a) { return a >= 500000 ? 3 : a >= 100000 ? 2 : a >= 25000 ? 1 : 0; }
+  function inr(a) { return '₹' + (a.toLocaleString ? a.toLocaleString('en-IN') : a); }
+  function short(a) { return a >= 10000000 ? (a / 10000000).toFixed(2) + 'Cr' : a >= 100000 ? (a / 100000).toFixed(1) + 'L' : a >= 1000 ? Math.round(a / 1000) + 'K' : String(a); }
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt) e.textContent = txt; return e; }
+
+  function confetti(n) {
+    var i, c;
+    for (i = 0; i < n; i++) {
+      c = el('div', 'conf', '🪙'); c.style.left = Math.round(Math.random() * 96) + '%';
+      c.style.fontSize = Math.round(rnd(18, 30)) + 'px'; c.style.animationDelay = (Math.random() * 1.1) + 's';
+      document.body.appendChild(c);
+      (function (x) { setTimeout(function () { if (x.parentNode) x.parentNode.removeChild(x); }, 5200); })(c);
+    }
+  }
+  function card(r) {
+    var a = Number(r.a), s = slab(isNaN(a) ? 0 : a), feed = document.getElementById('feed');
+    var c = el('div', 'card s' + s), row = el('div', 'row1');
+    row.appendChild(el('div', 'tier', ICONS[s] + '  ' + NAMES[s] + '  ·  ' + r.t));
+    c.appendChild(row);
+    c.appendChild(el('div', 'amt', isNaN(a) ? '' : inr(a)));
+    c.appendChild(el('div', 'meta', r.rm || ''));
+    var q = QUOTES[s]; c.appendChild(el('div', 'quote', q[Math.floor(Math.random() * q.length)]));
+    feed.insertBefore(c, feed.firstChild);
+    while (feed.children.length > 3) feed.removeChild(feed.lastChild);
+    setTimeout(function () { c.className += ' in'; }, 30);
+    setTimeout(function () { c.className = c.className.replace(' in', ''); setTimeout(function () { if (c.parentNode) c.parentNode.removeChild(c); }, 400); }, SHOW_MS[s]);
+    if (s === 3) confetti(30); else if (s === 2) confetti(9);
+    return s;
+  }
+
+  function setBadge() {
+    document.getElementById('badge').textContent =
+      (!armed ? '🔇 sound off' : nLoaded < nTotal ? '⏳ loading sounds' : '🔊 sound on') + (lastErr ? ' · ' + lastErr : lastOk ? ' · checked ' + lastOk : '');
+  }
+  function setTally() {
+    document.getElementById('tally').textContent = tallyN ? 'Since start: ' + tallyN + (tallyN === 1 ? ' deal' : ' deals') + ' · ₹' + short(tallyAmt) : '';
+  }
+
+  function arm() {
+    if (armed) return; armed = true;
+    document.getElementById('start').style.display = 'none';
+    try { getCtx().resume(); } catch (e) {}
+    setTimeout(function () { enqueue(1); }, 150); setBadge();
+  }
+  document.getElementById('start').addEventListener('click', arm);
+  document.addEventListener('keydown', arm);
+
+  function handle(rows) {
+    var fresh = [], i, r, top = 0, s;
+    for (i = 0; i < rows.length; i++) {
+      r = rows[i];
+      if (!seen[r.id]) { seen[r.id] = 1; if (!first) fresh.push(r); }
+    }
+    first = false;
+    if (!fresh.length) return;
+    for (i = 0; i < fresh.length && i < 4; i++) {
+      s = card(fresh[i]); if (s > top) top = s;
+    }
+    for (i = 0; i < fresh.length; i++) { tallyN++; tallyAmt += Number(fresh[i].a) || 0; }
+    setTally();
+    enqueue(top);
+    for (i = 1; i < fresh.length && i < 3; i++) enqueue(0);   /* extras are only a soft tick */
+  }
+
+  function poll() {
+    var x = new XMLHttpRequest();
+    x.open('GET', FEED + '?_=' + new Date().getTime());
+    x.timeout = 30000;
+    x.onload = function () {
+      try {
+        var d = JSON.parse(x.responseText);
+        if (!d.ok) throw new Error('no data');
+        handle(d.rows);
+        lastErr = ''; lastOk = new Date().toTimeString().slice(0, 8);
+      } catch (e) { lastErr = 'feed problem'; }
+      setBadge();
+    };
+    x.onerror = x.ontimeout = function () { lastErr = 'feed unreachable'; setBadge(); };
+    x.send();
+  }
+  setBadge(); setTally();
+  try { loadAll(); } catch (e) {}
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body></html>
