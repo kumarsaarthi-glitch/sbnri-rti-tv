@@ -28,6 +28,7 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial
 <div id="start"><div>&#128276; Press OK / click once to open the trading floor<small>Needed once after the TV opens this page</small></div></div>
 <div id="feed"></div>
 <div id="tally"></div>
+<div id="credit" style="position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:24;color:#fff;opacity:.55;font-size:11px">Sound: “Atm Cash Dispense” by BudgetPixel AI – CC BY 4.0</div>
 <div id="badge">starting...</div>
 <script>
 (function () {
@@ -37,8 +38,8 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial
 
   /* ---------- sound engine: real coin recordings (CC0, BigSoundBank), sliced and layered per slab ---------- */
   function snd(id) { return 'https://n8n.sbnri.com/webhook/sbnri-rti-snd?f=' + id; }
-  var FILES = { c1: '0193', c2: '0194', cupA: '0339', cupB: '0340', cupC: '0341' };
-  var ctx = null, master = null, bufs = {}, nLoaded = 0, nTotal = 5;
+  var FILES = { c1: '0193', c2: '0194', cupA: '0339', cupB: '0340', cupC: '0341', atm: 'atm' };
+  var ctx = null, master = null, bufs = {}, nLoaded = 0, nTotal = 6;
   function rnd(a, z) { return a + Math.random() * (z - a); }
   function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
   function getCtx() {
@@ -107,8 +108,8 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial
       slice(g.k, g.s, 0.32, t, vol * rnd(0.45, 1), rnd(0.88, 1.18));
     }
   }
-  var DUR = [0.9, 1.5, 2.5, 3.7];
-  function playSlab(s) {
+  var DUR = [1.9, 1.9, 3.2, 4.4];
+  function playCoins(s) {
     var k;
     if (s === 0) { k = pick(CUPS); if (bufs[k]) slice(k, 0, bufs[k].duration, 0, 0.55, rnd(0.97, 1.05)); return; }
     if (GR.length < 20) {                       /* fallback if hits could not be extracted */
@@ -119,6 +120,16 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial
     slice('c2', 2.4, 3.0, 0, 0.45, 1);
     take(TAKES[3], 0, 0.55); take(TAKES[5], 0.9, 0.5);
     spill(60, 0.8, 1.0); spill(150, 3.0, 1.0);
+  }
+
+  /* ATM cash dispense: one clip (motor + notes counting out), layered more for bigger deals */
+  function atm(when, vol, rate) { slice('atm', 1.15, 1.75, when, vol, rate || 1); }
+  function playSlab(s) {
+    if (!bufs.atm) { playCoins(s); return; }
+    if (s === 0) { atm(0, 0.8, 1); return; }
+    if (s === 1) { atm(0, 1, 1); return; }
+    if (s === 2) { atm(0, 1, 1); atm(0.5, 0.9, 1.06); atm(1.1, 0.9, 0.95); return; }
+    atm(0, 1, 1); atm(0.4, 1, 1.08); atm(0.9, 1, 0.94); atm(1.5, 1, 1.03); atm(2.1, 0.9, 1.1);
   }
 
   var queue = [], busy = false;
