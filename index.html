@@ -167,11 +167,11 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Arial
   function card(r) {
     var a = Number(r.a), s = slab(isNaN(a) ? 0 : a), feed = document.getElementById('feed');
     var c = el('div', 'card s' + s), row = el('div', 'row1');
-    row.appendChild(el('div', 'tier', ICONS[s] + '  ' + NAMES[s] + '  ·  ' + r.t));
+    row.appendChild(el('div', 'tier', r.t));
     c.appendChild(row);
     c.appendChild(el('div', 'amt', isNaN(a) ? '' : inr(a)));
     c.appendChild(el('div', 'meta', r.rm || ''));
-    var q = QUOTES[s]; c.appendChild(el('div', 'quote', q[Math.floor(Math.random() * q.length)]));
+    
     feed.insertBefore(c, feed.firstChild);
     while (feed.children.length > 3) feed.removeChild(feed.lastChild);
     setTimeout(function () { c.className += ' in'; }, 30);
